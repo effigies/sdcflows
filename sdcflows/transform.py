@@ -406,8 +406,8 @@ def grid_bspline_weights(target_nii, ctrl_nii, dtype="float32"):
 
         # Calculate the index component of samples w.r.t. B-Spline knots along current axis
         x = nb.affines.apply_affine(target_to_grid, coords.T)[:, axis]
-        pad_left = max(int(-np.rint(x.min())), 0)
-        pad_right = max(int(np.rint(x.max()) - knots_shape[axis]), 0)
+        pad_left = max(int(-np.floor(x.min())), 0)
+        pad_right = max(int(np.ceil(x.max()) - knots_shape[axis]), 0)
 
         # BSpline.design_matrix requires all x be within -4 and 4 padding
         # This padding results from the B-Spline degree (3) plus one
