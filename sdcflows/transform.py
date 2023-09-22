@@ -74,6 +74,7 @@ def _sdc_unwarp(
     pe_info: Tuple[int, float],
     hmc_xfm: np.ndarray | None,
     fmap_hz: np.ndarray,
+    jacobian: np.ndarray,
     output_dtype: str | np.dtype | None = None,
     order: int = 3,
     mode: str = "constant",
@@ -104,6 +105,9 @@ def _sdc_unwarp(
         prefilter=prefilter,
     )
 
+    if jacobian is not None:
+        resampled *= (jacobian * pe_info[1])
+
     return resampled
 
 
@@ -128,6 +132,7 @@ async def unwarp_parallel(
     fulldataset: np.ndarray,
     coordinates: np.ndarray,
     fmap_hz: np.ndarray,
+    jacobian: np.ndarray,
     pe_info: Sequence[Tuple[int, float]],
     xfms: Sequence[np.ndarray],
     order: int = 3,
@@ -193,6 +198,7 @@ async def unwarp_parallel(
     func = partial(
         _sdc_unwarp,
         fmap_hz=fmap_hz,
+        jacobian=jacobian,
         output_dtype=output_dtype,
         order=order,
         mode=mode,
@@ -237,6 +243,10 @@ class B0FieldTransform:
     """
     A cache of the interpolated field in Hz (i.e., the fieldmap *mapped* on to the
     target image we want to correct).
+    """
+    jacobian = attr.ib(default=None, init=False)
+    """
+    A cache of the Jacobian image mapped on to the target image we want to correct.
     """
 
     def fit(
@@ -332,10 +342,10 @@ class B0FieldTransform:
             coeffs_data.append(level.get_fdata(dtype="float32").reshape(-1))
 
         # Reconstruct the fieldmap (in Hz) from coefficients
-        fmap = np.zeros(projected_reference.shape[:3], dtype="float32")
-        fmap = (np.squeeze(np.hstack(coeffs_data).T) @ sparse_vstack(weights)).reshape(
-            fmap.shape
-        )
+        shape = projected_reference.shape[:3]
+        coeffs = np.hstack(coeffs_data).T
+        fmap = np.reshape(np.squeeze(coeffs) @ sparse_vstack(weights), shape)
+        jacobian = np.reshape(np.squeeze(coeffs) @ sparse_vstack(deriv_weights), shape)
 
         # Generate a NIfTI object
         hdr = target_reference.header.copy()
@@ -344,8 +354,14 @@ class B0FieldTransform:
         hdr["cal_max"] = max((abs(fmap.min()), fmap.max()))
         hdr["cal_min"] = -hdr["cal_max"]
 
+        # Jacobian header
+        jhdr = hdr.copy()
+        jhdr["cal_max"] = max((abs(jacobian.min()), jacobian.max()))
+        jhdr["cal_min"] = -hdr["cal_max"]
+
         # Cache
         self.mapped = nb.Nifti1Image(fmap, projected_reference.affine, hdr)
+        self.jacobian = nb.Nifti1Image(jacobian, projected_reference.affine, jhdr)
 
         if approx:
             from nitransforms.linear import Affine
@@ -360,6 +376,7 @@ class B0FieldTransform:
             # Interpolate fmap given on target_reference in the original target_reference
             # voxel locations (overwrite fmap)
             self.mapped = Affine(reference=_tmp_reference).apply(self.mapped)
+            self.jacobian = Affine(reference=_tmp_reference).apply(self.jacobian)
 
         return True
 
@@ -519,12 +536,16 @@ class B0FieldTransform:
                 "are implemented for its quality assurance."
             )
 
+        jacobian = None
+        # if self.jacobian is not None:
+        #     jacobian = self.jacobian.get_fdata(dtype="float32")
         # Resample
         resampled = asyncio.run(
             unwarp_parallel(
                 data,
                 voxcoords,
                 self.mapped.get_fdata(dtype="float32"),  # fieldmap in Hz
+                jacobian,
                 pe_info,
                 xfms,
                 output_dtype=output_dtype,
