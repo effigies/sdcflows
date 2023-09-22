@@ -321,10 +321,14 @@ class B0FieldTransform:
 
         # Generate tensor-product B-Spline weights
         weights = []
+        deriv_weights = []
         coeffs_data = []
         for level in coeffs:
-            wmat = grid_bspline_weights(target_reference, level)
-            weights.append(wmat)
+            weights0, weights1 = grid_bspline_weights(
+                target_reference, level, order=(0, 1)
+            )
+            weights.append(weights0)
+            deriv_weights.append(weights1)
             coeffs_data.append(level.get_fdata(dtype="float32").reshape(-1))
 
         # Reconstruct the fieldmap (in Hz) from coefficients
@@ -662,7 +666,7 @@ def disp_to_fmap(xyz_nii, ro_time, pe_dir, itk_format=True):
     return fmap_nii
 
 
-def grid_bspline_weights(target_nii, ctrl_nii, dtype="float32"):
+def grid_bspline_weights(target_nii, ctrl_nii, *, order=(0,), dtype="float32"):
     r"""
     Evaluate tensor-product B-Spline weights on a grid.
 
@@ -700,14 +704,18 @@ def grid_bspline_weights(target_nii, ctrl_nii, dtype="float32"):
         An spatial image object (typically, a :obj:`~nibabel.nifti1.Nifti1Image`)
         embedding the location of the control points of the B-Spline grid.
         The data array should contain a total of :math:`K` knots (control points).
+    order : :class:`~collections.abc.Sequence` of integers <= 3
+        The order of derivatives to calculate. 0 for standard B-Spline,
+        1 for first derivative (useful for calculating the Jacobian).
 
     Returns
     -------
-    weights : :obj:`numpy.ndarray` (:math:`K \times N`)
-        A sparse matrix of interpolating weights :math:`\Psi^3(\mathbf{k}, \mathbf{s})`
+    weights : list of :obj:`numpy.ndarray`\s (:math:`K \times N`)
+        Sparse matrices of interpolating weights :math:`\Psi^3(\mathbf{k}, \mathbf{s})`
         for the *N* voxels of the target EPI, for each of the total *K* knots.
-        This sparse matrix can be directly used as design matrix for the fitting
+        These sparse matrices can be directly used as design matrix for the fitting
         step of approximation/extrapolation.
+        The length of the list matches the length of the input ``order``.
 
     """
     sample_shape = target_nii.shape[:3]
@@ -725,7 +733,7 @@ def grid_bspline_weights(target_nii, ctrl_nii, dtype="float32"):
         warn("Image's and B-Spline's grids are not aligned.")
 
     target_to_grid = np.linalg.inv(ctrl_nii.affine) @ target_nii.affine
-    wd = []
+    design_matrices = [[] for _ in order]
     for axis in range(3):
         # 3D ijk coordinates of current axis
         coords = np.zeros((3, sample_shape[axis]), dtype=dtype)
@@ -744,14 +752,15 @@ def grid_bspline_weights(target_nii, ctrl_nii, dtype="float32"):
         distance = np.abs(locs[..., np.newaxis] - knots[np.newaxis, 3:-3])
         within_support = distance < 2.0
 
-        matrix = lil_array(distance.shape, dtype=dtype)
-        matrix[within_support] = bspl(locs)[:, 1:-1][within_support]
+        for mats, nu in zip(design_matrices, order):
+            matrix = lil_array(distance.shape, dtype=dtype)
+            matrix[within_support] = bspl.derivative(nu)(locs)[:, 1:-1][within_support]
 
-        # Transpose to (K, L) and convert to CSR for efficient multiplication
-        wd.append(matrix.T.tocsr())
+            # Transpose to (K, L) and convert to CSR for efficient multiplication
+            mats.append(matrix.T.tocsr())
 
     # Calculate the tensor product of the three design matrices
-    return kron(kron(wd[0], wd[1]), wd[2]).astype(dtype)
+    return [kron(kron(mat[0], mat[1]), mat[2]).astype(dtype) for mat in design_matrices]
 
 
 def _move_coeff(in_coeff, fmap_ref, transform, fmap_target=None):

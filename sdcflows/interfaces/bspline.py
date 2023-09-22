@@ -198,7 +198,7 @@ class BSplineApprox(SimpleInterface):
 
         # Calculate collocation matrix from (possibly resized) image and knot grids
         colmat = sparse_vstack(
-            grid_bspline_weights(fmapnii, grid) for grid in bs_grids
+            grid_bspline_weights(fmapnii, grid)[0] for grid in bs_grids
         ).T.tocsr()
 
         bs_grids_str = ["x".join(str(s) for s in grid.shape) for grid in bs_grids]
@@ -255,7 +255,7 @@ class BSplineApprox(SimpleInterface):
             else:
                 mask = np.ones_like(fmapnii.dataobj, dtype=bool)
             colmat = sparse_vstack(
-                grid_bspline_weights(fmapnii, grid) for grid in bs_grids
+                grid_bspline_weights(fmapnii, grid)[0] for grid in bs_grids
             ).T.tocsr()
 
         regressors = colmat[mask.reshape(-1), :]

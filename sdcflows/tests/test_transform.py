@@ -347,8 +347,9 @@ def test_grid_bspline_weights():
     weights = tf.grid_bspline_weights(
         nb.Nifti1Image(np.zeros(target_shape), target_aff),
         nb.Nifti1Image(np.zeros(ctrl_shape), ctrl_aff),
-    ).tocsr()
+    )[0].tocsr()
     assert weights.shape == (64, 1000)
+
     # Empirically determined numbers intended to indicate that something
     # significant has changed. If it turns out we've been doing this wrong,
     # these numbers will probably change.
